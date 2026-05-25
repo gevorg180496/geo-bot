@@ -20,7 +20,7 @@ from questions import generate_questions
 TOKEN = os.getenv("TOKEN")
 
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"https://geo-bot.onrender.com{WEBHOOK_PATH}"
+WEBHOOK_URL = "https://geo-bot-bg9k.onrender.com/webhook"
 
 logging.basicConfig(level=logging.INFO)
 
