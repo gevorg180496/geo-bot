@@ -1,217 +1,164 @@
+import asyncio
+import logging
+import os
+import random
+
+from aiohttp import web
 from aiogram import Bot, Dispatcher
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
+from aiogram.filters import CommandStart
 from aiogram.types import (
     Message,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    CallbackQuery,
-    BotCommand
+    CallbackQuery
 )
-from aiogram.filters import CommandStart
 
-import asyncio
-import logging
-import random
-import sqlite3
+from questions import questions
 
-from questions import COUNTRIES
-
-import os
 TOKEN = os.getenv("TOKEN")
+
+WEBHOOK_PATH = "/webhook"
+geo-bot
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=TOKEN)
+bot = Bot(
+    token=TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
+
 dp = Dispatcher()
 
-# =========================
-# DATABASE
-# =========================
-
-conn = sqlite3.connect("game.db")
-cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    score INTEGER DEFAULT 0,
-    streak INTEGER DEFAULT 0
-)
-""")
-conn.commit()
-
-
-def create_user(user_id, username):
-    cursor.execute("""
-        INSERT OR IGNORE INTO users (user_id, username)
-        VALUES (?, ?)
-    """, (user_id, username))
-
-    cursor.execute("""
-        UPDATE users SET username = ? WHERE user_id = ?
-    """, (username, user_id))
-
-    conn.commit()
-
-
-def get_score(user_id):
-    r = cursor.execute(
-        "SELECT score FROM users WHERE user_id=?",
-        (user_id,)
-    ).fetchone()
-    return r[0] if r else 0
-
-
-def get_streak(user_id):
-    r = cursor.execute(
-        "SELECT streak FROM users WHERE user_id=?",
-        (user_id,)
-    ).fetchone()
-    return r[0] if r else 0
-
-
-def add_score(user_id):
-    cursor.execute(
-        "UPDATE users SET score = score + 1 WHERE user_id=?",
-        (user_id,)
-    )
-    conn.commit()
-
-
-def increase_streak(user_id):
-    cursor.execute(
-        "UPDATE users SET streak = streak + 1 WHERE user_id=?",
-        (user_id,)
-    )
-    conn.commit()
-
-
-def reset_streak(user_id):
-    cursor.execute(
-        "UPDATE users SET streak = 0 WHERE user_id=?",
-        (user_id,)
-    )
-    conn.commit()
-
-
-def get_top_players():
-    return cursor.execute("""
-        SELECT username, score
-        FROM users
-        ORDER BY score DESC
-        LIMIT 10
-    """).fetchall()
-
-
-# =========================
-# GAME STATE
-# =========================
-
 user_questions = {}
-user_modes = {}
-question_tasks = {}
 used_questions = {}
 
 QUESTION_TIME = 10
 
 
 # =========================
-# MENU
+# КНОПКИ
 # =========================
-
-def menu():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🌍 Мир (195 стран)", callback_data="world")],
-
-            [InlineKeyboardButton(text="🇪🇺 Европа", callback_data="Europe")],
-            [InlineKeyboardButton(text="🏯 Азия", callback_data="Asia")],
-            [InlineKeyboardButton(text="🌴 Африка", callback_data="Africa")],
-            [InlineKeyboardButton(text="🗽 Америка", callback_data="America")],
-            [InlineKeyboardButton(text="🏝 Океания", callback_data="Oceania")],
-
-            # ✅ РЕЙТИНГ ВСЕГДА ДОСТУПЕН
-            [InlineKeyboardButton(text="🏆 Рейтинг", callback_data="rating")]
-        ]
-    )
-
 
 def create_keyboard(options):
-    opts = options.copy()
-    random.shuffle(opts)
 
-    return InlineKeyboardMarkup(
+    random.shuffle(options)
+
+    keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=o, callback_data=o)]
-            for o in opts
+            [
+                InlineKeyboardButton(
+                    text=option,
+                    callback_data=option
+                )
+            ]
+            for option in options
         ]
     )
 
+    return keyboard
+
+
+def create_menu():
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+
+            [
+                InlineKeyboardButton(
+                    text="🌍 Все страны мира",
+                    callback_data="world"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    text="🏛 Европа",
+                    callback_data="europe"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    text="🏯 Азия",
+                    callback_data="asia"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    text="🦁 Африка",
+                    callback_data="africa"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    text="🗽 Америка",
+                    callback_data="america"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    text="🏝 Океания",
+                    callback_data="oceania"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    text="🏆 Рейтинг",
+                    callback_data="rating"
+                )
+            ]
+        ]
+    )
+
+    return keyboard
+
 
 # =========================
-# QUESTION ENGINE (NO REPEATS)
+# ВОПРОСЫ
 # =========================
 
-def get_question(user_id, region=None):
+def get_questions_by_region(region):
 
-    if user_id not in used_questions:
-        used_questions[user_id] = set()
+    if region == "world":
+        return questions
 
-    data = COUNTRIES
-
-    if region:
-        data = [c for c in COUNTRIES if c[2] == region]
-
-    available = [
-        c for c in data
-        if c[0] not in used_questions[user_id]
+    return [
+        q for q in questions
+        if q["region"] == region
     ]
 
-    if not available:
-        used_questions[user_id] = set()
-        available = data
 
-    country, capital, _ = random.choice(available)
+def get_question(user_id, region):
 
-    used_questions[user_id].add(country)
+    key = f"{user_id}_{region}"
 
-    capitals = [c[1] for c in data]
+    if key not in used_questions:
+        used_questions[key] = []
 
-    wrong = random.sample([x for x in capitals if x != capital], 3)
-    options = wrong + [capital]
-    random.shuffle(options)
+    region_questions = get_questions_by_region(region)
 
-    return {
-        "country": country,
-        "capital": capital,
-        "options": options
-    }
+    available_questions = [
+        q for q in region_questions
+        if q["country"] not in used_questions[key]
+    ]
 
+    if len(available_questions) == 0:
 
-# =========================
-# TIMER
-# =========================
+        used_questions[key] = []
 
-async def timeout(chat_id, message_id, user_id):
+        available_questions = region_questions
 
-    await asyncio.sleep(QUESTION_TIME)
+    question = random.choice(available_questions)
 
-    if user_id not in user_questions:
-        return
+    used_questions[key].append(question["country"])
 
-    reset_streak(user_id)
-
-    q = user_questions[user_id]
-
-    try:
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=f"⏰ Время вышло!\n\n🏳 {q['country']}\n\n🏆 Очки: {get_score(user_id)}\n🔥 Серия: {get_streak(user_id)}",
-            reply_markup=create_keyboard(q["options"])
-        )
-    except:
-        pass
+    return question
 
 
 # =========================
@@ -220,11 +167,15 @@ async def timeout(chat_id, message_id, user_id):
 
 @dp.message(CommandStart())
 async def start(message: Message):
-    create_user(message.from_user.id, message.from_user.first_name)
+
+    text = (
+        "🌍 <b>WORLD QUIZ</b>\n\n"
+        "Выберите режим:"
+    )
 
     await message.answer(
-        "🌍 WORLD QUIZ\n\nВыбери режим:",
-        reply_markup=menu()
+        text,
+        reply_markup=create_menu()
     )
 
 
@@ -233,118 +184,154 @@ async def start(message: Message):
 # =========================
 
 @dp.callback_query()
-async def callback(callback: CallbackQuery):
+async def callbacks(callback: CallbackQuery):
 
     user_id = callback.from_user.id
     data = callback.data
 
-    # ================= MODES =================
-
-    if data in ["world", "Europe", "Asia", "Africa", "America", "Oceania"]:
-
-        user_modes[user_id] = data
-
-        region = None if data == "world" else data
-
-        q = get_question(user_id, region)
-
-        user_questions[user_id] = q
-
-        await callback.message.edit_text(
-            f"🏳 {q['country']}\n\n"
-            f"🏆 Очки: {get_score(user_id)}\n"
-            f"🔥 Серия: {get_streak(user_id)}",
-            reply_markup=create_keyboard(q["options"])
-        )
-
-        task = asyncio.create_task(
-            timeout(callback.message.chat.id,
-                    callback.message.message_id,
-                    user_id)
-        )
-
-        question_tasks[user_id] = task
-        return
-
-
-    # ================= RATING (FIXED) =================
-
     if data == "rating":
 
-        players = get_top_players()
+        text = (
+            "🏆 Рейтинг пока в разработке"
+        )
 
-        text = "🏆 РЕЙТИНГ (ВСЕ ИГРОКИ)\n\n"
+        await callback.message.edit_text(
+            text,
+            reply_markup=create_menu()
+        )
 
-        if not players:
-            text += "Пока нет игроков"
-        else:
-            i = 1
-            for p in players:
-                name = p[0] or "Unknown"
-                score = p[1]
-
-                medal = (
-                    "🥇" if i == 1 else
-                    "🥈" if i == 2 else
-                    "🥉" if i == 3 else
-                    f"{i}."
-                )
-
-                text += f"{medal} {name} — {score}\n"
-                i += 1
-
-        await callback.message.edit_text(text, reply_markup=menu())
         return
 
+    question = get_question(user_id, data)
 
-    # ================= ANSWERS =================
+    user_questions[user_id] = {
+        "question": question,
+        "region": data
+    }
 
-    q = user_questions.get(user_id)
-    if not q:
-        return
+    keyboard = create_keyboard(question["options"])
 
-    if user_id in question_tasks:
-        question_tasks[user_id].cancel()
-
-    selected = data.strip()
-    correct = q["capital"].strip()
-
-    if selected == correct:
-        add_score(user_id)
-        increase_streak(user_id)
-        result = "✅ Верно!"
-    else:
-        reset_streak(user_id)
-        result = f"❌ Неверно!\nПравильный ответ: {correct}"
-
-    mode = user_modes.get(user_id, "world")
-    region = None if mode == "world" else mode
-
-    new_q = get_question(user_id, region)
-
-    user_questions[user_id] = new_q
+    text = (
+        f"🌍 Какая столица у страны:\n\n"
+        f"🏳 {question['country']}"
+    )
 
     await callback.message.edit_text(
-        f"{result}\n\n🏳 {new_q['country']}\n\n🏆 Очки: {get_score(user_id)}\n🔥 Серия: {get_streak(user_id)}",
-        reply_markup=create_keyboard(new_q["options"])
+        text,
+        reply_markup=keyboard
     )
-
-    task = asyncio.create_task(
-        timeout(callback.message.chat.id,
-                callback.message.message_id,
-                user_id)
-    )
-
-    question_tasks[user_id] = task
 
 
 # =========================
-# MAIN
+# ОТВЕТЫ
 # =========================
+
+@dp.callback_query()
+async def answer_handler(callback: CallbackQuery):
+
+    user_id = callback.from_user.id
+
+    if user_id not in user_questions:
+        return
+
+    current = user_questions[user_id]
+
+    question = current["question"]
+    region = current["region"]
+
+    selected_answer = callback.data
+
+    correct_answer = question["capital"]
+
+    if selected_answer == correct_answer:
+        result = "✅ Верно!"
+    else:
+        result = (
+            f"❌ Неверно!\n"
+            f"Правильный ответ: {correct_answer}"
+        )
+
+    new_question = get_question(user_id, region)
+
+    user_questions[user_id] = {
+        "question": new_question,
+        "region": region
+    }
+
+    keyboard = create_keyboard(new_question["options"])
+
+    text = (
+        f"{result}\n\n"
+        f"🌍 Какая столица у страны:\n\n"
+        f"🏳 {new_question['country']}"
+    )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=keyboard
+    )
+
+
+# =========================
+# WEBHOOK
+# =========================
+
+async def on_startup(bot: Bot):
+
+    await bot.set_webhook(WEBHOOK_URL)
+
+    print("Webhook started...")
+
+
+async def on_shutdown(bot: Bot):
+
+    await bot.delete_webhook()
+
+    print("Webhook stopped...")
+
+
+async def handle(request):
+
+    update = await request.json()
+
+    await dp.feed_webhook_update(
+        bot,
+        update
+    )
+
+    return web.Response()
+
 
 async def main():
+
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
+
+    app = web.Application()
+
+    app.router.add_post(
+        WEBHOOK_PATH,
+        handle
+    )
+
+    runner = web.AppRunner(app)
+
+    await runner.setup()
+
+    port = int(os.getenv("PORT", 10000))
+
+    site = web.TCPSite(
+        runner,
+        "0.0.0.0",
+        port
+    )
+
+    await site.start()
+
     print("Bot started...")
-    await dp.start_polling(bot)
+
+    while True:
+        await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
