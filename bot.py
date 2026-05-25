@@ -15,7 +15,7 @@ from aiogram.types import (
     CallbackQuery
 )
 
-from questions import questions
+from questions import generate_questions
 
 TOKEN = os.getenv("TOKEN")
 
@@ -35,6 +35,7 @@ user_questions = {}
 used_questions = {}
 
 QUESTION_TIME = 10
+questions = generate_questions()
 
 
 # =========================
