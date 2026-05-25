@@ -1,166 +1,163 @@
 import asyncio
+import json
 import logging
 import os
 import random
 
 from aiohttp import web
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.types import (
     Message,
+    CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    CallbackQuery
 )
 
-from questions import generate_questions
+logging.basicConfig(level=logging.INFO)
 
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
+
+bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher()
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = "https://geo-bot-bg9k.onrender.com/webhook"
 
-logging.basicConfig(level=logging.INFO)
-
-bot = Bot(
-    token=TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
-
-dp = Dispatcher()
-
-user_questions = {}
-used_questions = {}
-
-QUESTION_TIME = 10
-questions = generate_questions()
-
-
 # =========================
-# КНОПКИ
+# ЗАГРУЗКА ВОПРОСОВ
 # =========================
 
-def create_keyboard(options):
+with open("questions.json", "r", encoding="utf-8") as f:
+    questions = json.load(f)
 
-    random.shuffle(options)
+# =========================
+# РЕЙТИНГ
+# =========================
 
-    keyboard = InlineKeyboardMarkup(
+RATING_FILE = "rating.json"
+
+if not os.path.exists(RATING_FILE):
+    with open(RATING_FILE, "w", encoding="utf-8") as f:
+        json.dump({}, f)
+
+with open(RATING_FILE, "r", encoding="utf-8") as f:
+    rating_data = json.load(f)
+
+# =========================
+# ПОЛЬЗОВАТЕЛИ
+# =========================
+
+users = {}
+
+# =========================
+# РЕГИОНЫ
+# =========================
+
+REGIONS = {
+    "world": "🌍 Весь мир",
+    "europe": "🏰 Европа",
+    "asia": "🏯 Азия",
+    "africa": "🦁 Африка",
+    "north_america": "🗽 Северная Америка",
+    "south_america": "🦜 Южная Америка",
+    "oceania": "🏝 Океания",
+}
+
+# =========================
+# МЕНЮ
+# =========================
+
+def main_menu():
+    return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=option,
-                    callback_data=option
-                )
-            ]
-            for option in options
-        ]
-    )
-
-    return keyboard
-
-
-def create_menu():
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-
-            [
-                InlineKeyboardButton(
-                    text="🌍 Все страны мира",
-                    callback_data="world"
+                    text="🌍 Весь мир",
+                    callback_data="region_world",
                 )
             ],
-
             [
                 InlineKeyboardButton(
-                    text="🏛 Европа",
-                    callback_data="europe"
-                )
-            ],
-
-            [
+                    text="🏰 Европа",
+                    callback_data="region_europe",
+                ),
                 InlineKeyboardButton(
                     text="🏯 Азия",
-                    callback_data="asia"
-                )
+                    callback_data="region_asia",
+                ),
             ],
-
             [
                 InlineKeyboardButton(
                     text="🦁 Африка",
-                    callback_data="africa"
-                )
+                    callback_data="region_africa",
+                ),
+                InlineKeyboardButton(
+                    text="🗽 Северная Америка",
+                    callback_data="region_north_america",
+                ),
             ],
-
             [
                 InlineKeyboardButton(
-                    text="🗽 Америка",
-                    callback_data="america"
-                )
-            ],
-
-            [
+                    text="🦜 Южная Америка",
+                    callback_data="region_south_america",
+                ),
                 InlineKeyboardButton(
                     text="🏝 Океания",
-                    callback_data="oceania"
-                )
+                    callback_data="region_oceania",
+                ),
             ],
-
             [
                 InlineKeyboardButton(
                     text="🏆 Рейтинг",
-                    callback_data="rating"
+                    callback_data="rating",
                 )
-            ]
+            ],
         ]
     )
 
-    return keyboard
-
-
 # =========================
-# ВОПРОСЫ
+# ФИЛЬТР ПО РЕГИОНУ
 # =========================
 
 def get_questions_by_region(region):
-
     if region == "world":
         return questions
 
     return [
         q for q in questions
-        if q["region"] == region
+        if q.get("region") == region
     ]
 
+# =========================
+# НОВЫЙ КРУГ
+# =========================
 
-def get_question(user_id, region):
-
-    key = f"{user_id}_{region}"
-
-    if key not in used_questions:
-        used_questions[key] = []
-
+def start_new_round(user_id, region):
     region_questions = get_questions_by_region(region)
 
-    available_questions = [
-        q for q in region_questions
-        if q["country"] not in used_questions[key]
-    ]
+    shuffled = region_questions.copy()
+    random.shuffle(shuffled)
 
-    if len(available_questions) == 0:
+    users[user_id] = {
+        "region": region,
+        "questions": shuffled,
+        "current": 0,
+        "score": 0,
+    }
 
-        used_questions[key] = []
+# =========================
+# ТЕКУЩИЙ ВОПРОС
+# =========================
 
-        available_questions = region_questions
+def get_current_question(user_id):
+    user = users[user_id]
 
-    question = random.choice(available_questions)
+    if user["current"] >= len(user["questions"]):
+        return None
 
-    used_questions[key].append(question["country"])
-
-    return question
-
+    return user["questions"][user["current"]]
 
 # =========================
 # START
@@ -168,158 +165,167 @@ def get_question(user_id, region):
 
 @dp.message(CommandStart())
 async def start(message: Message):
-
-    text = (
-        "🌍 <b>WORLD QUIZ</b>\n\n"
-        "Выберите режим:"
-    )
-
     await message.answer(
-        text,
-        reply_markup=create_menu()
+        "🌎 <b>Квиз по географии</b>\n\n"
+        "Выбери режим:",
+        reply_markup=main_menu(),
     )
-
 
 # =========================
 # CALLBACKS
 # =========================
 
-@dp.callback_query()
-async def callbacks(callback: CallbackQuery):
+@dp.callback_query(F.data.startswith("region_"))
+async def choose_region(callback: CallbackQuery):
+    region = callback.data.replace("region_", "")
 
-    user_id = callback.from_user.id
-    data = callback.data
+    start_new_round(callback.from_user.id, region)
 
-    if data == "rating":
+    question = get_current_question(callback.from_user.id)
 
-        text = (
-            "🏆 Рейтинг пока в разработке"
-        )
-
-        await callback.message.edit_text(
-            text,
-            reply_markup=create_menu()
-        )
-
-        return
-
-    question = get_question(user_id, data)
-
-    user_questions[user_id] = {
-        "question": question,
-        "region": data
-    }
-
-    keyboard = create_keyboard(question["options"])
-
-    text = (
-        f"🌍 Какая столица у страны:\n\n"
-        f"🏳 {question['country']}"
+    await callback.message.edit_text(
+        f"🌍 Страна:\n\n"
+        f"<b>{question['country']}</b>\n\n"
+        f"Напиши столицу:",
     )
+
+    await callback.answer()
+
+# =========================
+# РЕЙТИНГ
+# =========================
+
+@dp.callback_query(F.data == "rating")
+async def show_rating(callback: CallbackQuery):
+    if not rating_data:
+        text = "🏆 Рейтинг пока пуст."
+    else:
+        sorted_rating = sorted(
+            rating_data.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+        lines = []
+
+        for i, (name, score) in enumerate(sorted_rating[:10], start=1):
+            lines.append(f"{i}. {name} — {score}")
+
+        text = "🏆 <b>ТОП игроков</b>\n\n" + "\n".join(lines)
 
     await callback.message.edit_text(
         text,
-        reply_markup=keyboard
+        reply_markup=main_menu(),
     )
 
+    await callback.answer()
 
 # =========================
 # ОТВЕТЫ
 # =========================
 
-@dp.callback_query()
-async def answer_handler(callback: CallbackQuery):
+@dp.message()
+async def answers(message: Message):
+    user_id = message.from_user.id
 
-    user_id = callback.from_user.id
-
-    if user_id not in user_questions:
+    if user_id not in users:
         return
 
-    current = user_questions[user_id]
+    user = users[user_id]
 
-    question = current["question"]
-    region = current["region"]
+    question = get_current_question(user_id)
 
-    selected_answer = callback.data
+    if not question:
+        return
 
-    correct_answer = question["capital"]
+    user_answer = message.text.strip().lower()
+    correct_answer = question["capital"].strip().lower()
 
-    if selected_answer == correct_answer:
-        result = "✅ Верно!"
+    if user_answer == correct_answer:
+        user["score"] += 1
+
+        text = "✅ Правильно!"
     else:
-        result = (
-            f"❌ Неверно!\n"
-            f"Правильный ответ: {correct_answer}"
+        text = (
+            f"❌ Неправильно!\n\n"
+            f"Правильный ответ:\n"
+            f"<b>{question['capital']}</b>"
         )
 
-    new_question = get_question(user_id, region)
+    user["current"] += 1
 
-    user_questions[user_id] = {
-        "question": new_question,
-        "region": region
-    }
+    next_question = get_current_question(user_id)
 
-    keyboard = create_keyboard(new_question["options"])
+    if next_question:
+        await message.answer(
+            f"{text}\n\n"
+            f"🌍 Следующая страна:\n\n"
+            f"<b>{next_question['country']}</b>\n\n"
+            f"Напиши столицу:"
+        )
+    else:
+        final_score = user["score"]
+        total = len(user["questions"])
 
-    text = (
-        f"{result}\n\n"
-        f"🌍 Какая столица у страны:\n\n"
-        f"🏳 {new_question['country']}"
-    )
+        region = user["region"]
 
-    await callback.message.edit_text(
-        text,
-        reply_markup=keyboard
-    )
+        result_text = (
+            f"🏁 Круг завершён!\n\n"
+            f"🎯 Результат: {final_score}/{total}"
+        )
 
+        if region == "world":
+            username = message.from_user.first_name
+
+            old_score = rating_data.get(username, 0)
+
+            if final_score > old_score:
+                rating_data[username] = final_score
+
+                with open(RATING_FILE, "w", encoding="utf-8") as f:
+                    json.dump(rating_data, f, ensure_ascii=False, indent=2)
+
+                result_text += "\n\n🏆 Новый рекорд!"
+
+        await message.answer(
+            result_text,
+            reply_markup=main_menu(),
+        )
 
 # =========================
 # WEBHOOK
 # =========================
 
 async def on_startup(bot: Bot):
-
     await bot.set_webhook(WEBHOOK_URL)
 
-    print("Webhook started...")
-
-
 async def on_shutdown(bot: Bot):
-
     await bot.delete_webhook()
 
-    print("Webhook stopped...")
-
-
 async def handle(request):
-
     update = await request.json()
-
     await dp.feed_webhook_update(
-        bot,
-        update
+        bot=bot,
+        update=update
     )
-
     return web.Response()
 
+# =========================
+# MAIN
+# =========================
 
 async def main():
-
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
     app = web.Application()
 
-    app.router.add_post(
-        WEBHOOK_PATH,
-        handle
-    )
+    app.router.add_post(WEBHOOK_PATH, handle)
+
+    port = int(os.environ.get("PORT", 10000))
 
     runner = web.AppRunner(app)
-
     await runner.setup()
-
-    port = int(os.getenv("PORT", 10000))
 
     site = web.TCPSite(
         runner,
@@ -333,7 +339,6 @@ async def main():
 
     while True:
         await asyncio.sleep(3600)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
