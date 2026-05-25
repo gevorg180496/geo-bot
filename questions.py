@@ -174,3 +174,4 @@ def generate_questions(region=None):
         })
 
     return questions
+    questions = countries
