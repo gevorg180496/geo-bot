@@ -15,6 +15,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     CallbackQuery,
+    Update
 )
 
 from questions import generate_questions
@@ -47,11 +48,11 @@ leaderboard = {}
 
 def main_menu():
     keyboard = [
-        [KeyboardButton(text="🌍 Все страны мира")],
-        [KeyboardButton(text="🇪🇺 Европа"), KeyboardButton(text="🏯 Азия")],
-        [KeyboardButton(text="🦁 Африка"), KeyboardButton(text="🗽 Америка")],
-        [KeyboardButton(text="🏝 Океания")],
-        [KeyboardButton(text="🏆 Рейтинг")],
+        [KeyboardButton(text="🌎 Все страны мира")],
+        [KeyboardButton(text="🇪🇺 Европа"), KeyboardButton(text="🌏 Азия")],
+        [KeyboardButton(text="🌍 Африка"), KeyboardButton(text="🌎 Америка")],
+        [KeyboardButton(text="🏝️ Океания")],
+        [KeyboardButton(text="🏆 Рейтинг")]
     ]
 
     return ReplyKeyboardMarkup(
@@ -69,7 +70,7 @@ async def start(message: Message):
         reply_markup=main_menu()
     )
 
-# ================= ЗАПУСК ИГРЫ =================
+# ================= СТАРТ ИГРЫ =================
 
 async def start_game(message: Message, region_name, region_code):
     questions = generate_questions(region_code)
@@ -85,15 +86,15 @@ async def start_game(message: Message, region_name, region_code):
 
     await message.answer(
         f"🎮 Режим: {region_name}\n\n"
-        f"Поехали!"
+        f"Удачи!"
     )
 
     await send_question(message.chat.id)
 
 # ================= РЕЖИМЫ =================
 
-@dp.message(F.text == "🌍 Все страны мира")
-async def all_world(message: Message):
+@dp.message(F.text == "🌎 Все страны мира")
+async def world(message: Message):
     await start_game(message, "Все страны мира", "WORLD")
 
 @dp.message(F.text == "🇪🇺 Европа")
@@ -112,7 +113,7 @@ async def africa(message: Message):
 async def america(message: Message):
     await start_game(message, "Америка", "America")
 
-@dp.message(F.text == "🏝 Океания")
+@dp.message(F.text == "🏝️ Океания")
 async def oceania(message: Message):
     await start_game(message, "Океания", "Oceania")
 
@@ -247,7 +248,7 @@ async def answer(callback: CallbackQuery):
 
 async def on_startup(app):
     await bot.set_webhook(WEBHOOK_URL)
-    print("Webhook set:", WEBHOOK_URL)
+    print(f"Webhook set: {WEBHOOK_URL}")
 
 async def on_shutdown(app):
     await bot.delete_webhook()
@@ -255,9 +256,12 @@ async def on_shutdown(app):
 
 async def handle(request):
     data = await request.json()
-    update = dp.resolve_update(bot=bot, update=data)
+
+    update = Update.model_validate(data)
+
     await dp.feed_update(bot, update)
-    return web.Response()
+
+    return web.Response(text="ok")
 
 # ================= SERVER =================
 
