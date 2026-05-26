@@ -29,6 +29,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 users = {}
+rating = {}
 
 
 def get_question(user_id):
@@ -45,40 +46,93 @@ async def start(message: Message):
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🌍 Европа", callback_data="Europe")
+                InlineKeyboardButton(
+                    text="🌍 Все страны мира",
+                    callback_data="ALL"
+                )
             ],
             [
-                InlineKeyboardButton(text="🌏 Азия", callback_data="Asia")
+                InlineKeyboardButton(
+                    text="🏛 Европа",
+                    callback_data="Europe"
+                )
             ],
             [
-                InlineKeyboardButton(text="🌍 Африка", callback_data="Africa")
+                InlineKeyboardButton(
+                    text="🕌 Азия",
+                    callback_data="Asia"
+                )
             ],
             [
-                InlineKeyboardButton(text="🌎 Америка", callback_data="America")
+                InlineKeyboardButton(
+                    text="🦁 Африка",
+                    callback_data="Africa"
+                )
             ],
             [
-                InlineKeyboardButton(text="🌏 Океания", callback_data="Oceania")
+                InlineKeyboardButton(
+                    text="🗽 Америка",
+                    callback_data="America"
+                )
             ],
+            [
+                InlineKeyboardButton(
+                    text="🏝 Океания",
+                    callback_data="Oceania"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏆 Рейтинг",
+                    callback_data="rating"
+                )
+            ]
         ]
     )
 
     await message.answer(
-        "Выбери регион:",
+        "🌍 WORLD QUIZ\n\nВыберите режим:",
         reply_markup=keyboard
     )
 
 
+@dp.callback_query(F.data == "rating")
+async def show_rating(call: CallbackQuery):
+    if not rating:
+        await call.message.answer("🏆 Рейтинг пока пуст.")
+        await call.answer()
+        return
+
+    text = "🏆 Рейтинг игроков:\n\n"
+
+    sorted_rating = sorted(
+        rating.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    for i, (name, score) in enumerate(sorted_rating[:10], start=1):
+        text += f"{i}. {name} — {score}\n"
+
+    await call.message.answer(text)
+    await call.answer()
+
+
 @dp.callback_query()
-async def callbacks(call: CallbackQuery):
+async def region_selected(call: CallbackQuery):
     region = call.data
     user_id = call.from_user.id
 
-    questions = generate_questions(region)
+    if region == "ALL":
+        questions = generate_questions()
+    else:
+        questions = generate_questions(region)
+
     random.shuffle(questions)
 
     users[user_id] = {
         "score": 0,
-        "questions": questions
+        "questions": questions,
     }
 
     await send_question(call.message, user_id)
@@ -92,9 +146,35 @@ async def send_question(message, user_id):
     if not question:
         score = users[user_id]["score"]
 
-        await message.answer(
-            f"🎉 Игра окончена!\n\nРезультат: {score}"
+        username = (
+            message.chat.username
+            or message.chat.first_name
+            or "Игрок"
         )
+
+        if username not in rating:
+            rating[username] = 0
+
+        if score > rating[username]:
+            rating[username] = score
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Играть снова",
+                        callback_data="restart"
+                    )
+                ]
+            ]
+        )
+
+        await message.answer(
+            f"🎉 Игра окончена!\n\n"
+            f"Ваш результат: {score}",
+            reply_markup=keyboard
+        )
+
         return
 
     users[user_id]["current"] = question
@@ -112,13 +192,20 @@ async def send_question(message, user_id):
     )
 
     await message.answer(
-        f"Столица какой страны?\n\n{question['country']}",
+        f"Столица какой страны?\n\n"
+        f"{question['country']}",
         reply_markup=keyboard
     )
 
 
+@dp.callback_query(F.data == "restart")
+async def restart(call: CallbackQuery):
+    await start(call.message)
+    await call.answer()
+
+
 @dp.callback_query(F.data.startswith("answer|"))
-async def answers(call: CallbackQuery):
+async def answer_handler(call: CallbackQuery):
     user_id = call.from_user.id
     answer = call.data.split("|")[1]
 
@@ -126,11 +213,15 @@ async def answers(call: CallbackQuery):
 
     if answer == question["capital"]:
         users[user_id]["score"] += 1
-        text = "✅ Правильно!"
-    else:
-        text = f"❌ Неправильно!\nПравильный ответ: {question['capital']}"
 
-    await call.message.answer(text)
+        await call.message.answer(
+            "✅ Правильно!"
+        )
+    else:
+        await call.message.answer(
+            f"❌ Неправильно!\n\n"
+            f"Правильный ответ: {question['capital']}"
+        )
 
     await send_question(call.message, user_id)
 
@@ -153,7 +244,10 @@ setup_application(app, dp, bot=bot)
 PORT = int(os.environ.get("PORT", 10000))
 
 if __name__ == "__main__":
-    try:
-        web.run_app(app, host="0.0.0.0", port=PORT)
-    except Exception as e:
-        print("START ERROR:", e)
+    print("BOT STARTED")
+
+    web.run_app(
+        app,
+        host="0.0.0.0",
+        port=PORT
+    )
