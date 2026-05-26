@@ -33,12 +33,10 @@ rating = {}
 
 
 def get_question(user_id):
-    user = users[user_id]
-
-    if not user["questions"]:
+    if not users[user_id]["questions"]:
         return None
 
-    return user["questions"].pop()
+    return users[user_id]["questions"].pop()
 
 
 @dp.message(CommandStart())
@@ -118,7 +116,16 @@ async def show_rating(call: CallbackQuery):
     await call.answer()
 
 
-@dp.callback_query()
+@dp.callback_query(
+    F.data.in_([
+        "ALL",
+        "Europe",
+        "Asia",
+        "Africa",
+        "America",
+        "Oceania"
+    ])
+)
 async def region_selected(call: CallbackQuery):
     region = call.data
     user_id = call.from_user.id
@@ -132,7 +139,7 @@ async def region_selected(call: CallbackQuery):
 
     users[user_id] = {
         "score": 0,
-        "questions": questions,
+        "questions": questions
     }
 
     await send_question(call.message, user_id)
@@ -214,9 +221,7 @@ async def answer_handler(call: CallbackQuery):
     if answer == question["capital"]:
         users[user_id]["score"] += 1
 
-        await call.message.answer(
-            "✅ Правильно!"
-        )
+        await call.message.answer("✅ Правильно!")
     else:
         await call.message.answer(
             f"❌ Неправильно!\n\n"
@@ -226,10 +231,6 @@ async def answer_handler(call: CallbackQuery):
     await send_question(call.message, user_id)
 
     await call.answer()
-
-
-async def on_startup(bot: Bot):
-    await bot.set_webhook(WEBHOOK_URL)
 
 
 app = web.Application()
@@ -242,6 +243,14 @@ SimpleRequestHandler(
 setup_application(app, dp, bot=bot)
 
 PORT = int(os.environ.get("PORT", 10000))
+
+
+async def on_startup(app):
+    await bot.set_webhook(WEBHOOK_URL)
+    print("Webhook set!")
+
+
+app.on_startup.append(on_startup)
 
 if __name__ == "__main__":
     print("BOT STARTED")
