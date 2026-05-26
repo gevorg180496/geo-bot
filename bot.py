@@ -16,7 +16,8 @@ from aiogram.types import (
 )
 from aiogram.client.default import DefaultBotProperties
 
-from questions import questions
+from questions import generate_questions
+questions = generate_questions()
 
 # =========================
 # НАСТРОЙКИ
