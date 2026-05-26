@@ -1,287 +1,272 @@
+import asyncio
+import logging
 import os
 import random
-import logging
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart
 from aiogram.types import (
     Message,
-    CallbackQuery,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-)
-from aiogram.filters import CommandStart
-from aiogram.webhook.aiohttp_server import (
-    SimpleRequestHandler,
-    setup_application,
+    CallbackQuery,
 )
 
 from questions import generate_questions
 
+# ================= НАСТРОЙКИ =================
+
+TOKEN = os.getenv("BOT_TOKEN")
+
+WEBHOOK_HOST = "https://geo-bot-bg9k.onrender.com"
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+PORT = int(os.getenv("PORT", 10000))
+
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+bot = Bot(
+    token=TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = "https://geo-bot-bg9k.onrender.com/webhook"
-
-bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-games = {}
-ratings = {}
+# ================= ДАННЫЕ =================
 
+user_sessions = {}
+leaderboard = {}
 
-def get_question(user_id):
-    game = games[user_id]
+# ================= КНОПКИ =================
 
-    if game["index"] >= len(game["questions"]):
-        return None
+def main_menu():
+    keyboard = [
+        [KeyboardButton(text="🌍 Все страны мира")],
+        [KeyboardButton(text="🇪🇺 Европа"), KeyboardButton(text="🏯 Азия")],
+        [KeyboardButton(text="🦁 Африка"), KeyboardButton(text="🗽 Америка")],
+        [KeyboardButton(text="🏝 Океания")],
+        [KeyboardButton(text="🏆 Рейтинг")],
+    ]
 
-    question = game["questions"][game["index"]]
-    game["index"] += 1
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True
+    )
 
-    return question
-
+# ================= СТАРТ =================
 
 @dp.message(CommandStart())
 async def start(message: Message):
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🌍 Все страны мира",
-                    callback_data="ALL"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🏛 Европа",
-                    callback_data="Europe"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🕌 Азия",
-                    callback_data="Asia"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🦁 Африка",
-                    callback_data="Africa"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🗽 Америка",
-                    callback_data="America"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🏝 Океания",
-                    callback_data="Oceania"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🏆 Рейтинг",
-                    callback_data="rating"
-                )
-            ]
-        ]
-    )
-
     await message.answer(
-        "🌍 WORLD QUIZ\n\nВыберите режим игры:",
-        reply_markup=keyboard
+        "🌍 Добро пожаловать в Geo Bot!\n\n"
+        "Выберите режим игры:",
+        reply_markup=main_menu()
     )
 
+# ================= ЗАПУСК ИГРЫ =================
 
-@dp.callback_query(F.data == "rating")
-async def show_rating(call: CallbackQuery):
-    if not ratings:
-        await call.message.answer("🏆 Рейтинг пока пуст.")
-        await call.answer()
-        return
-
-    text = "🏆 ТОП ИГРОКОВ\n\n"
-
-    sorted_rating = sorted(
-        ratings.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    for i, (name, score) in enumerate(sorted_rating[:10], start=1):
-        text += f"{i}. {name} — {score}\n"
-
-    await call.message.answer(text)
-    await call.answer()
-
-
-@dp.callback_query(
-    F.data.in_([
-        "ALL",
-        "Europe",
-        "Asia",
-        "Africa",
-        "America",
-        "Oceania"
-    ])
-)
-async def region_selected(call: CallbackQuery):
-    user_id = call.from_user.id
-    region = call.data
-
-    if region == "ALL":
-        questions = generate_questions()
-        mode = None
-    else:
-        questions = generate_questions(region)
-        mode = region
+async def start_game(message: Message, region_name, region_code):
+    questions = generate_questions(region_code)
 
     random.shuffle(questions)
 
-    games[user_id] = {
+    user_sessions[message.chat.id] = {
         "questions": questions,
         "index": 0,
         "score": 0,
-        "streak": 0,
-        "best_streak": 0,
-        "mode": mode
+        "region": region_code
     }
 
-    await send_question(call.message, user_id)
+    await message.answer(
+        f"🎮 Режим: {region_name}\n\n"
+        f"Поехали!"
+    )
 
-    await call.answer()
+    await send_question(message.chat.id)
 
+# ================= РЕЖИМЫ =================
 
-async def send_question(message, user_id):
-    question = get_question(user_id)
+@dp.message(F.text == "🌍 Все страны мира")
+async def all_world(message: Message):
+    await start_game(message, "Все страны мира", "WORLD")
 
-    if not question:
-        game = games[user_id]
+@dp.message(F.text == "🇪🇺 Европа")
+async def europe(message: Message):
+    await start_game(message, "Европа", "Europe")
 
-        score = game["score"]
-        best_streak = game["best_streak"]
+@dp.message(F.text == "🌏 Азия")
+async def asia(message: Message):
+    await start_game(message, "Азия", "Asia")
 
-        username = (
-            message.chat.username
-            or message.chat.first_name
-            or "Игрок"
-        )
+@dp.message(F.text == "🌍 Африка")
+async def africa(message: Message):
+    await start_game(message, "Африка", "Africa")
 
-        # рейтинг только для всех стран мира
-        if game["mode"] is None:
-            if username not in ratings:
-                ratings[username] = 0
+@dp.message(F.text == "🌎 Америка")
+async def america(message: Message):
+    await start_game(message, "Америка", "America")
 
-            if score > ratings[username]:
-                ratings[username] = score
+@dp.message(F.text == "🏝 Океания")
+async def oceania(message: Message):
+    await start_game(message, "Океания", "Oceania")
 
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🔄 Играть снова",
-                        callback_data="restart"
-                    )
-                ]
-            ]
-        )
+# ================= РЕЙТИНГ =================
 
-        await message.answer(
-            f"🎉 Игра окончена!\n\n"
-            f"✅ Правильных ответов: {score}\n"
-            f"🔥 Лучшая серия: {best_streak}",
-            reply_markup=keyboard
-        )
-
+@dp.message(F.text == "🏆 Рейтинг")
+async def show_rating(message: Message):
+    if not leaderboard:
+        await message.answer("🏆 Рейтинг пока пуст.")
         return
 
-    games[user_id]["current"] = question
+    sorted_players = sorted(
+        leaderboard.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )[:10]
 
-    keyboard = InlineKeyboardMarkup(
+    text = "🏆 Топ игроков:\n\n"
+
+    for i, (user_id, score) in enumerate(sorted_players, start=1):
+        try:
+            user = await bot.get_chat(user_id)
+            name = user.first_name
+        except:
+            name = "Игрок"
+
+        text += f"{i}. {name} — {score}\n"
+
+    await message.answer(text)
+
+# ================= ВОПРОС =================
+
+async def send_question(chat_id):
+    session = user_sessions[chat_id]
+
+    if session["index"] >= len(session["questions"]):
+        streak = session["score"]
+
+        text = (
+            f"🎉 Игра окончена!\n\n"
+            f"🔥 Правильных подряд: {streak}\n"
+        )
+
+        if session["region"] == "WORLD":
+            old_score = leaderboard.get(chat_id, 0)
+
+            if streak > old_score:
+                leaderboard[chat_id] = streak
+                text += "\n🏆 Новый рекорд!"
+            else:
+                text += f"\n🏆 Ваш рекорд: {old_score}"
+
+        del user_sessions[chat_id]
+
+        await bot.send_message(
+            chat_id,
+            text,
+            reply_markup=main_menu()
+        )
+        return
+
+    q = session["questions"][session["index"]]
+
+    kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=option,
-                    callback_data=f"answer|{option}"
-                )
-            ]
-            for option in question["options"]
+            [InlineKeyboardButton(text=opt, callback_data=opt)]
+            for opt in q["options"]
         ]
     )
 
-    await message.answer(
-        f"🌍 Столица какой страны?\n\n"
-        f"❓ {question['country']}",
-        reply_markup=keyboard
+    await bot.send_message(
+        chat_id,
+        f"🌍 Страна: <b>{q['country']}</b>\n\n"
+        f"Выберите столицу:",
+        reply_markup=kb
     )
 
+# ================= ОТВЕТ =================
 
-@dp.callback_query(F.data.startswith("answer|"))
-async def answer_handler(call: CallbackQuery):
-    user_id = call.from_user.id
-    answer = call.data.split("|")[1]
+@dp.callback_query()
+async def answer(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
 
-    game = games[user_id]
-    question = game["current"]
+    if chat_id not in user_sessions:
+        return
 
-    if answer == question["capital"]:
-        game["score"] += 1
-        game["streak"] += 1
+    session = user_sessions[chat_id]
+    q = session["questions"][session["index"]]
 
-        if game["streak"] > game["best_streak"]:
-            game["best_streak"] = game["streak"]
+    if callback.data == q["capital"]:
+        session["score"] += 1
+        session["index"] += 1
 
-        await call.message.answer("✅ Правильно!")
-
-    else:
-        game["streak"] = 0
-
-        await call.message.answer(
-            f"❌ Неправильно!\n\n"
-            f"Правильный ответ: {question['capital']}"
+        await callback.message.edit_text(
+            f"✅ Правильно!\n"
+            f"🔥 Серия: {session['score']}"
         )
 
-    await send_question(call.message, user_id)
+        await send_question(chat_id)
 
-    await call.answer()
+    else:
+        streak = session["score"]
 
+        text = (
+            f"❌ Неправильно!\n\n"
+            f"Правильный ответ: {q['capital']}\n\n"
+            f"🔥 Правильных подряд: {streak}"
+        )
 
-@dp.callback_query(F.data == "restart")
-async def restart(call: CallbackQuery):
-    await start(call.message)
-    await call.answer()
+        if session["region"] == "WORLD":
+            old_score = leaderboard.get(chat_id, 0)
 
+            if streak > old_score:
+                leaderboard[chat_id] = streak
+                text += "\n🏆 Новый рекорд!"
+            else:
+                text += f"\n🏆 Ваш рекорд: {old_score}"
 
-app = web.Application()
+        del user_sessions[chat_id]
 
-SimpleRequestHandler(
-    dispatcher=dp,
-    bot=bot,
-).register(app, path=WEBHOOK_PATH)
+        await callback.message.edit_text(text)
 
-setup_application(app, dp, bot=bot)
+        await bot.send_message(
+            chat_id,
+            "Выберите режим:",
+            reply_markup=main_menu()
+        )
 
-PORT = int(os.environ.get("PORT", 10000))
+    await callback.answer()
 
+# ================= WEBHOOK =================
 
 async def on_startup(app):
     await bot.set_webhook(WEBHOOK_URL)
-    print("Webhook set!")
+    print("Webhook set:", WEBHOOK_URL)
 
+async def on_shutdown(app):
+    await bot.delete_webhook()
+    await bot.session.close()
+
+async def handle(request):
+    data = await request.json()
+    update = dp.resolve_update(bot=bot, update=data)
+    await dp.feed_update(bot, update)
+    return web.Response()
+
+# ================= SERVER =================
+
+app = web.Application()
+
+app.router.add_post(WEBHOOK_PATH, handle)
 
 app.on_startup.append(on_startup)
+app.on_shutdown.append(on_shutdown)
 
 if __name__ == "__main__":
-    print("BOT STARTED")
-
-    web.run_app(
-        app,
-        host="0.0.0.0",
-        port=PORT
-    )
+    web.run_app(app, host="0.0.0.0", port=PORT)
