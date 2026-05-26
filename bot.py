@@ -28,15 +28,20 @@ WEBHOOK_URL = "https://geo-bot-bg9k.onrender.com/webhook"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-users = {}
-rating = {}
+games = {}
+ratings = {}
 
 
 def get_question(user_id):
-    if not users[user_id]["questions"]:
+    game = games[user_id]
+
+    if game["index"] >= len(game["questions"]):
         return None
 
-    return users[user_id]["questions"].pop()
+    question = game["questions"][game["index"]]
+    game["index"] += 1
+
+    return question
 
 
 @dp.message(CommandStart())
@@ -89,22 +94,22 @@ async def start(message: Message):
     )
 
     await message.answer(
-        "🌍 WORLD QUIZ\n\nВыберите режим:",
+        "🌍 WORLD QUIZ\n\nВыберите режим игры:",
         reply_markup=keyboard
     )
 
 
 @dp.callback_query(F.data == "rating")
 async def show_rating(call: CallbackQuery):
-    if not rating:
+    if not ratings:
         await call.message.answer("🏆 Рейтинг пока пуст.")
         await call.answer()
         return
 
-    text = "🏆 Рейтинг игроков:\n\n"
+    text = "🏆 ТОП ИГРОКОВ\n\n"
 
     sorted_rating = sorted(
-        rating.items(),
+        ratings.items(),
         key=lambda x: x[1],
         reverse=True
     )
@@ -127,19 +132,25 @@ async def show_rating(call: CallbackQuery):
     ])
 )
 async def region_selected(call: CallbackQuery):
-    region = call.data
     user_id = call.from_user.id
+    region = call.data
 
     if region == "ALL":
         questions = generate_questions()
+        mode = None
     else:
         questions = generate_questions(region)
+        mode = region
 
     random.shuffle(questions)
 
-    users[user_id] = {
+    games[user_id] = {
+        "questions": questions,
+        "index": 0,
         "score": 0,
-        "questions": questions
+        "streak": 0,
+        "best_streak": 0,
+        "mode": mode
     }
 
     await send_question(call.message, user_id)
@@ -151,7 +162,10 @@ async def send_question(message, user_id):
     question = get_question(user_id)
 
     if not question:
-        score = users[user_id]["score"]
+        game = games[user_id]
+
+        score = game["score"]
+        best_streak = game["best_streak"]
 
         username = (
             message.chat.username
@@ -159,11 +173,13 @@ async def send_question(message, user_id):
             or "Игрок"
         )
 
-        if username not in rating:
-            rating[username] = 0
+        # рейтинг только для всех стран мира
+        if game["mode"] is None:
+            if username not in ratings:
+                ratings[username] = 0
 
-        if score > rating[username]:
-            rating[username] = score
+            if score > ratings[username]:
+                ratings[username] = score
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -178,13 +194,14 @@ async def send_question(message, user_id):
 
         await message.answer(
             f"🎉 Игра окончена!\n\n"
-            f"Ваш результат: {score}",
+            f"✅ Правильных ответов: {score}\n"
+            f"🔥 Лучшая серия: {best_streak}",
             reply_markup=keyboard
         )
 
         return
 
-    users[user_id]["current"] = question
+    games[user_id]["current"] = question
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -199,16 +216,10 @@ async def send_question(message, user_id):
     )
 
     await message.answer(
-        f"Столица какой страны?\n\n"
-        f"{question['country']}",
+        f"🌍 Столица какой страны?\n\n"
+        f"❓ {question['country']}",
         reply_markup=keyboard
     )
-
-
-@dp.callback_query(F.data == "restart")
-async def restart(call: CallbackQuery):
-    await start(call.message)
-    await call.answer()
 
 
 @dp.callback_query(F.data.startswith("answer|"))
@@ -216,13 +227,21 @@ async def answer_handler(call: CallbackQuery):
     user_id = call.from_user.id
     answer = call.data.split("|")[1]
 
-    question = users[user_id]["current"]
+    game = games[user_id]
+    question = game["current"]
 
     if answer == question["capital"]:
-        users[user_id]["score"] += 1
+        game["score"] += 1
+        game["streak"] += 1
+
+        if game["streak"] > game["best_streak"]:
+            game["best_streak"] = game["streak"]
 
         await call.message.answer("✅ Правильно!")
+
     else:
+        game["streak"] = 0
+
         await call.message.answer(
             f"❌ Неправильно!\n\n"
             f"Правильный ответ: {question['capital']}"
@@ -230,6 +249,12 @@ async def answer_handler(call: CallbackQuery):
 
     await send_question(call.message, user_id)
 
+    await call.answer()
+
+
+@dp.callback_query(F.data == "restart")
+async def restart(call: CallbackQuery):
+    await start(call.message)
     await call.answer()
 
 
